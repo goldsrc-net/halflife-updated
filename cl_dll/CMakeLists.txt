@@ -8,29 +8,33 @@
 # This is how it was done in the original Linux makefiles as well
 # DO NOT DO THIS FOR ANY OTHER LIBRARIES YOU USE! If you must ship a dynamic library you should use the same approach used for OpenAL.
 
-add_library(vgui SHARED IMPORTED)
-add_library(SDL2 SHARED IMPORTED)
+if(NOT HALFLIFE_EMSCRIPTEN)
+	add_library(vgui SHARED IMPORTED)
+	add_library(SDL2 SHARED IMPORTED)
 
-target_include_directories(vgui INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../utils/vgui/include)
-target_include_directories(SDL2 INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../external)
+	target_include_directories(vgui INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../utils/vgui/include)
+	target_include_directories(SDL2 INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../external)
 
-if (WIN32)
-	set_target_properties(vgui PROPERTIES IMPORTED_IMPLIB "${CMAKE_CURRENT_SOURCE_DIR}/../utils/vgui/lib/win32_vc16/vgui.lib")
-	set_target_properties(SDL2 PROPERTIES IMPORTED_IMPLIB "${CMAKE_CURRENT_SOURCE_DIR}/../lib/public/SDL2.lib")
-else()
-	# Copy libraries provided by the game to the build directory so we can point the compiler and linker to the files.
-	configure_file(../linux/release/vgui${CMAKE_SHARED_LIBRARY_SUFFIX} ${CMAKE_CURRENT_BINARY_DIR}/vgui${CMAKE_SHARED_LIBRARY_SUFFIX} COPYONLY)
-	configure_file(../linux/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0 ${CMAKE_CURRENT_BINARY_DIR}/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0 COPYONLY)
+	if (WIN32)
+		set_target_properties(vgui PROPERTIES IMPORTED_IMPLIB "${CMAKE_CURRENT_SOURCE_DIR}/../utils/vgui/lib/win32_vc16/vgui.lib")
+		set_target_properties(SDL2 PROPERTIES IMPORTED_IMPLIB "${CMAKE_CURRENT_SOURCE_DIR}/../lib/public/SDL2.lib")
+	else()
+		# Copy libraries provided by the game to the build directory so we can point the compiler and linker to the files.
+		configure_file(../linux/release/vgui${CMAKE_SHARED_LIBRARY_SUFFIX} ${CMAKE_CURRENT_BINARY_DIR}/vgui${CMAKE_SHARED_LIBRARY_SUFFIX} COPYONLY)
+		configure_file(../linux/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0 ${CMAKE_CURRENT_BINARY_DIR}/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0 COPYONLY)
 
-	set_target_properties(vgui PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/vgui${CMAKE_SHARED_LIBRARY_SUFFIX}")
-	set_target_properties(SDL2 PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0")
+		set_target_properties(vgui PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/vgui${CMAKE_SHARED_LIBRARY_SUFFIX}")
+		set_target_properties(SDL2 PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/libSDL2-2.0${CMAKE_SHARED_LIBRARY_SUFFIX}.0")
+	endif()
 endif()
 
 # End special case stuff for dynamic libraries included with the game
 
 add_library(client SHARED)
 
-set_target_properties(client PROPERTIES INSTALL_RPATH "$ORIGIN")
+if(NOT HALFLIFE_EMSCRIPTEN)
+	set_target_properties(client PROPERTIES INSTALL_RPATH "$ORIGIN")
+endif()
 
 set_common_properties(client)
 
@@ -50,15 +54,21 @@ target_compile_definitions(client PRIVATE
 	CLIENT_DLL
 	HL_DLL)
 
-target_link_libraries(client PRIVATE
-	vgui
-	$<$<PLATFORM_ID:Windows>:delayimp>
-	$<$<PLATFORM_ID:Windows>:wsock32>
-	SDL2)
+if(HALFLIFE_EMSCRIPTEN)
+	target_include_directories(client PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../utils/vgui/include
+		${CMAKE_CURRENT_SOURCE_DIR}/../external)
+else()
+	target_link_libraries(client PRIVATE
+		vgui
+		$<$<PLATFORM_ID:Windows>:delayimp>
+		$<$<PLATFORM_ID:Windows>:wsock32>
+		SDL2)
 
-if (UNIX)
-	# Tell the linker to search for vgui.so and SDL2-2.0.so.0 in here
-	target_link_directories(client PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+	if (UNIX)
+		# Tell the linker to search for vgui.so and SDL2-2.0.so.0 in here
+		target_link_directories(client PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+	endif()
 endif()
 
 target_link_options(client PRIVATE

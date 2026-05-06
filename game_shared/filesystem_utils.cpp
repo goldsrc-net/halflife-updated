@@ -70,6 +70,9 @@ static bool FileSystem_InitializeGameDirectory()
 		// Path was truncated. Game is installed in the wrong location (Steam shouldn't allow this).
 		return false;
 	}
+#elif defined(__EMSCRIPTEN__)
+	gameDirectory = "/rodir";
+	const std::size_t BufferSize = PATH_MAX + 1;
 #else
 	const std::size_t BufferSize = PATH_MAX + 1;
 	gameDirectory.resize(BufferSize);
@@ -126,6 +129,8 @@ bool FileSystem_LoadFileSystem()
 	const char* szFsModule = "filesystem_stdio.dll";
 #elif defined(OSX)
 	const char* szFsModule = "filesystem_stdio.dylib";
+#elif defined(__EMSCRIPTEN__)
+	const char* szFsModule = "/filesystem_stdio.wasm";
 #elif defined(LINUX)
 	const char* szFsModule = "filesystem_stdio.so";
 #else

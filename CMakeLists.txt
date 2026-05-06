@@ -13,6 +13,21 @@ project(HalfLifeMod
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+# Detect Emscripten for WASM side module builds
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+	set(HALFLIFE_EMSCRIPTEN ON)
+
+	# Emscripten's CMake platform disables shared libraries by default.
+	# We need them enabled to build WASM side modules.
+	set(CMAKE_SHARED_LIBRARY_SUFFIX ".wasm")
+	set_property(GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS TRUE)
+
+	# Side module compile and link flags (needed whether using emcmake or our toolchain)
+	string(APPEND CMAKE_C_FLAGS " -fPIC -sSIDE_MODULE=1 -fno-exceptions")
+	string(APPEND CMAKE_CXX_FLAGS " -fPIC -sSIDE_MODULE=1 -fno-exceptions")
+	string(APPEND CMAKE_SHARED_LINKER_FLAGS " -sSIDE_MODULE=1 -sALLOW_TABLE_GROWTH -fno-exceptions")
+endif()
+
 # Disable the use of absolute paths in library paths even in development builds.
 set(CMAKE_SKIP_BUILD_RPATH ON)
 
@@ -65,47 +80,58 @@ function(set_common_properties TARGET_NAME)
 		$<$<PLATFORM_ID:Darwin>:OSX _OSX>
 		UNIFIED_SDK_CONFIG="$<CONFIG>")
 
-	target_link_libraries(${TARGET_NAME} PRIVATE
-		${CMAKE_DL_LIBS})
+	if(HALFLIFE_EMSCRIPTEN)
+		target_compile_definitions(${TARGET_NAME} PRIVATE POSIX _POSIX LINUX _LINUX GNUC)
+	endif()
+
+	if(NOT HALFLIFE_EMSCRIPTEN)
+		target_link_libraries(${TARGET_NAME} PRIVATE
+			${CMAKE_DL_LIBS})
+	endif()
 
 	target_include_directories(${TARGET_NAME} PRIVATE
 		${CMAKE_BINARY_DIR})
 
 	# TODO: review Linux compiler flags
-	#
-	# x86-32 (i386/i686) gets -march=pentium-m -mfpmath=387 to match the
-	# precision and ABI Valve's original makefile produced. These flags are
-	# illegal on aarch64 / x86_64 (gcc rejects them), so they're gated on a
-	# 32-bit-x86 detection. The Darwin -arch i386 block likewise applies only
-	# when targeting i386 — on aarch64 macOS / Apple-Silicon native builds
-	# (if anyone ever does that) those flags would be wrong.
-	set(_HALFLIFE_IS_X86_32 FALSE)
-	if (CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86" AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-		set(_HALFLIFE_IS_X86_32 TRUE)
+	if(HALFLIFE_EMSCRIPTEN)
+		# Common flags that are safe for Emscripten
+		target_compile_options(${TARGET_NAME} PRIVATE
+			-fpermissive -fno-strict-aliasing -Wno-invalid-offsetof)
+	else()
+		# x86-32 (i386/i686) gets -march=pentium-m -mfpmath=387 to match the
+		# precision and ABI Valve's original makefile produced. These flags are
+		# illegal on aarch64 / x86_64 (gcc rejects them), so they're gated on a
+		# 32-bit-x86 detection. The Darwin -arch i386 block likewise applies only
+		# when targeting i386 — on aarch64 macOS / Apple-Silicon native builds
+		# (if anyone ever does that) those flags would be wrong.
+		set(_HALFLIFE_IS_X86_32 FALSE)
+		if (CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86" AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+			set(_HALFLIFE_IS_X86_32 TRUE)
+		endif()
+
+		target_compile_options(${TARGET_NAME} PRIVATE
+			# Common GNU/Clang flags — apply on every arch.
+			$<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-fpermissive -fno-strict-aliasing -Wno-invalid-offsetof>
+
+			# x86-32-only: force 387 FP math + pentium-m arch (matches Valve's
+			# original makefile; produces ABI-equivalent code to engine 8684's
+			# expectations on i686).
+			$<$<AND:$<CXX_COMPILER_ID:Clang,AppleClang,GNU>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-march=pentium-m -mfpmath=387>
+
+			# flifetime-dse=1 is needed to disable a compiler optimization that optimizes out std::memset calls in CBaseEntity::operator new
+			# See https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-flifetime-dse for more information about this flag
+			# fno-gnu-unique is needed to disable a compiler optimization that prevents dlclose from unloading mod dlls,
+			# causing them to retain state and crash when the engine tries to access memory in an invalid way
+			# See https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html#index-fno-gnu-unique for more information about this flag
+			$<$<CXX_COMPILER_ID:GNU>:-flifetime-dse=1 -fno-gnu-unique>
+
+			# Can't set warning level to W4 until the compiler can deal with std::visit containing static_assert, which currently causes false positive "Unreachable code" warnings
+			$<$<CXX_COMPILER_ID:MSVC>:/W3 /MP>
+
+			# Darwin x86-32-only: original Makefile's macOS i386 block. Untested
+			# under CMake; gated on x86-32 so it doesn't fire on Apple Silicon.
+			$<$<AND:$<PLATFORM_ID:Darwin>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-Qunused-arguments -mmacosx-version-min=10.5 -fasm-blocks -arch i386 -march=prescott -momit-leaf-frame-pointer -mtune=core2>)
 	endif()
-
-	target_compile_options(${TARGET_NAME} PRIVATE
-		# Common GNU/Clang flags — apply on every arch.
-		$<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-fpermissive -fno-strict-aliasing -Wno-invalid-offsetof>
-
-		# x86-32-only: force 387 FP math + pentium-m arch (matches Valve's
-		# original makefile; produces ABI-equivalent code to engine 8684's
-		# expectations on i686).
-		$<$<AND:$<CXX_COMPILER_ID:Clang,AppleClang,GNU>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-march=pentium-m -mfpmath=387>
-
-		# flifetime-dse=1 is needed to disable a compiler optimization that optimizes out std::memset calls in CBaseEntity::operator new
-		# See https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-flifetime-dse for more information about this flag
-		# fno-gnu-unique is needed to disable a compiler optimization that prevents dlclose from unloading mod dlls,
-		# causing them to retain state and crash when the engine tries to access memory in an invalid way
-		# See https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html#index-fno-gnu-unique for more information about this flag
-		$<$<CXX_COMPILER_ID:GNU>:-flifetime-dse=1 -fno-gnu-unique>
-
-		# Can't set warning level to W4 until the compiler can deal with std::visit containing static_assert, which currently causes false positive "Unreachable code" warnings
-		$<$<CXX_COMPILER_ID:MSVC>:/W3 /MP>
-
-		# Darwin x86-32-only: original Makefile's macOS i386 block. Untested
-		# under CMake; gated on x86-32 so it doesn't fire on Apple Silicon.
-		$<$<AND:$<PLATFORM_ID:Darwin>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-Qunused-arguments -mmacosx-version-min=10.5 -fasm-blocks -arch i386 -march=prescott -momit-leaf-frame-pointer -mtune=core2>)
 
 	# Disable certain compiler warnings.
 	if (MSVC)
@@ -126,12 +152,23 @@ function(set_common_properties TARGET_NAME)
 			/wd26812)
 	endif()
 
-	target_link_options(${TARGET_NAME} PRIVATE
-		$<$<PLATFORM_ID:Linux>:-static-libstdc++ -Wl,-Map,${TARGET_NAME}_map.txt -Wl,--no-undefined>)
+	if(HALFLIFE_EMSCRIPTEN)
+		# Side modules leave external symbols unresolved (resolved by main module at runtime)
+		target_link_options(${TARGET_NAME} PRIVATE
+			-sERROR_ON_UNDEFINED_SYMBOLS=0)
+	else()
+		target_link_options(${TARGET_NAME} PRIVATE
+			$<$<PLATFORM_ID:Linux>:-static-libstdc++ -Wl,-Map,${TARGET_NAME}_map.txt -Wl,--no-undefined>)
+	endif()
 endfunction()
 
 add_subdirectory(cl_dll)
 add_subdirectory(dlls)
+
+if(HALFLIFE_EMSCRIPTEN)
+	set_target_properties(hl PROPERTIES OUTPUT_NAME "hl_emscripten_wasm32")
+	set_target_properties(client PROPERTIES OUTPUT_NAME "client_emscripten_wasm32")
+endif()
 
 # Set Visual Studio starting project
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT client)
