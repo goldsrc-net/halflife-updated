@@ -1986,7 +1986,13 @@ void CSave::WriteFunction(const char* pname, void** data, int count)
 {
 	const char* functionName;
 
-	functionName = NAME_FOR_FUNCTION((uint32)*data);
+	// pfnNameForFunction's engine ABI takes uint32 — on 64-bit hosts the
+	// caller's full function pointer doesn't fit and silently truncates.
+	// Cast through uintptr_t to make the narrowing explicit and silence
+	// -Wpointer-to-int-cast. Save/restore via this path is therefore
+	// broken on 64-bit until the engine widens the API to uintptr_t;
+	// this only affects single-player saves (MP doesn't run save/restore).
+	functionName = NAME_FOR_FUNCTION((uint32)(uintptr_t)*data);
 	if (functionName)
 		BufferField(pname, strlen(functionName) + 1, functionName);
 	else
