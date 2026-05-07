@@ -31,7 +31,32 @@ inline globalvars_t* gpGlobals = nullptr;
 
 // Use this instead of ALLOC_STRING on constant strings
 #define STRING(offset) ((const char*)(gpGlobals->pStringBase + (unsigned int)(offset)))
-#define MAKE_STRING(str) ((uint64)(str) - (uint64)(STRING(0)))
+
+// MAKE_STRING converts a `const char *` to a `string_t` (the engine's
+// 32-bit offset into pr_strings). The classic Valve definition was
+// `((unsigned int)(str) - (unsigned int)(STRING(0)))` — i.e., reinterpret
+// the literal's pointer as a small offset by subtracting pr_strings'
+// pointer. That worked on 32-bit because the entire address space fit in
+// uint32, so any `.rodata` literal was numerically close to pr_strings.
+// On 64-bit, gamedll `.rodata` literals (~0x7ffff45X_XXXX) and the
+// engine's pr_strings (~0x7ffff4aa_XXXX) live MB+ apart, and the
+// difference truncated to uint32 produces garbage that, when added back
+// to pr_strings later, lands on kernel-space canonical addresses → SIGSEGV.
+//
+// On 64-bit the only correct semantics is to actually allocate the string
+// in the engine's pool via ALLOC_STRING, which returns a real engine-side
+// offset that fits in string_t. This is slightly slower than the original
+// pointer-arithmetic trick (one engine call per MAKE_STRING site) but the
+// hundreds of MAKE_STRING("...") sites in gamedll code path produce
+// per-string deduped offsets via Ed_StrPool, so cost is bounded.
+//
+// On 32-bit we keep the original pointer-arithmetic form for byte-equivalence
+// with the legacy gamedll binary that ReHLDS was reverse-engineered against.
+#if defined(__LP64__) || defined(_WIN64) || defined(__x86_64__) || defined(__aarch64__)
+#define MAKE_STRING(str) ALLOC_STRING(str)
+#else
+#define MAKE_STRING(str) ((unsigned int)(str) - (unsigned int)(STRING(0)))
+#endif
 
 inline edict_t* FIND_ENTITY_BY_CLASSNAME(edict_t* entStart, const char* pszName)
 {
