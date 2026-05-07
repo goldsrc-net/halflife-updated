@@ -1984,15 +1984,7 @@ void CSave::WritePositionVector(const char* pname, const float* value, int count
 
 void CSave::WriteFunction(const char* pname, void** data, int count)
 {
-	const char* functionName;
-
-	// pfnNameForFunction's engine ABI takes uint32 — on 64-bit hosts the
-	// caller's full function pointer doesn't fit and silently truncates.
-	// Cast through uintptr_t to make the narrowing explicit and silence
-	// -Wpointer-to-int-cast. Save/restore via this path is therefore
-	// broken on 64-bit until the engine widens the API to uintptr_t;
-	// this only affects single-player saves (MP doesn't run save/restore).
-	functionName = NAME_FOR_FUNCTION((uint32)(uintptr_t)*data);
+	const char* functionName = NAME_FOR_FUNCTION((uintp)*data);
 	if (functionName)
 		BufferField(pname, strlen(functionName) + 1, functionName);
 	else
@@ -2392,10 +2384,14 @@ int CRestore::ReadField(void* pBaseData, TYPEDESCRIPTION* pFields, int fieldCoun
 						*((int*)pOutputData) = *(int*)pInputData;
 						break;
 					case FIELD_FUNCTION:
-						if (strlen((char*)pInputData) == 0)
-							*((int*)pOutputData) = 0;
-						else
-							*((int*)pOutputData) = FUNCTION_FROM_NAME((char*)pInputData);
+						// FIELD_FUNCTION's storage is a member function pointer
+						// (gSizes[FIELD_FUNCTION] = sizeof(int*) * 2 on Itanium ABI).
+						// Zero the whole slot so the adjustor word is 0 (non-virtual
+						// member function), then write the resolved address into the
+						// first pointer-sized word.
+						memset(pOutputData, 0, gSizes[pTest->fieldType]);
+						if (strlen((char*)pInputData) != 0)
+							*((uintp*)pOutputData) = FUNCTION_FROM_NAME((char*)pInputData);
 						break;
 
 					default:

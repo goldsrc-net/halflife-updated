@@ -305,17 +305,10 @@ public:
 
 	// Ugly code to lookup all functions to make sure they are exported when set.
 #ifdef _DEBUG
-	// FunctionCheck verifies a member function pointer was actually
-	// LINK_ENTITY_TO_CLASS-exported. The engine's pfnNameForFunction takes
-	// a 32-bit function-id (uint32), which is wrong-by-API on 64-bit hosts:
-	// passing a >4 GB function pointer truncates and the lookup misses.
-	// Until the engine widens that ABI to uintptr_t the cast goes through
-	// uintptr_t to silence -Wpointer-to-int-cast and make the truncation
-	// explicit. Debug-only path; release builds don't compile this.
 	void FunctionCheck(void* pFunction, const char* name)
 	{
-		if (pFunction && !NAME_FOR_FUNCTION((uint32)(uintptr_t)pFunction))
-			ALERT(at_error, "No EXPORT: %s:%s (%08lx)\n", STRING(pev->classname), name, (unsigned long)(uintptr_t)pFunction);
+		if (pFunction && !NAME_FOR_FUNCTION((uintp)pFunction))
+			ALERT(at_error, "No EXPORT: %s:%s (%p)\n", STRING(pev->classname), name, pFunction);
 	}
 
 	// The original FunctionCheck call sites read the function pointer
