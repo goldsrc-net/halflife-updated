@@ -1832,7 +1832,22 @@ void UpdateClientData(const edict_t* ent, int sendweapons, struct clientdata_s* 
 
 	cd->waterlevel = pev->waterlevel;
 	cd->watertype = pev->watertype;
-	cd->weapons = pev->weapons;
+	// halflife-updated stores the player's weapon bitmask in
+	// CBasePlayer::m_WeaponBits (std::uint64_t) and ships the bits to its
+	// own cl_dll via the custom gmsgWeapons message rather than the
+	// engine's per-frame client_data.iWeaponBits delta. Vanilla HL clients
+	// (i.e., a stock anniversary client connecting to this server) don't
+	// have the matching cl_dll, so they only see cd->weapons / iWeaponBits.
+	// Without this sync, pev->weapons stays 0, the WEAPON_SUIT bit (31)
+	// never reaches the vanilla HUD, and the HEV display never appears.
+	// Replicate the lower 32 bits of m_WeaponBits into cd->weapons so the
+	// legacy channel carries WEAPON_SUIT and weapons 0..30 to vanilla
+	// clients. The halflife-updated cl_dll ignores cdata->iWeaponBits
+	// (see cl_dll/hud_update.cpp:38), so updated clients are unaffected.
+	if (pl)
+		cd->weapons = static_cast<int>(pl->m_WeaponBits & 0xFFFFFFFF);
+	else
+		cd->weapons = pev->weapons;
 
 	// Vectors
 	cd->origin = pev->origin;
