@@ -72,12 +72,26 @@ function(set_common_properties TARGET_NAME)
 		${CMAKE_BINARY_DIR})
 
 	# TODO: review Linux compiler flags
+	#
+	# x86-32 (i386/i686) gets -march=pentium-m -mfpmath=387 to match the
+	# precision and ABI Valve's original makefile produced. These flags are
+	# illegal on aarch64 / x86_64 (gcc rejects them), so they're gated on a
+	# 32-bit-x86 detection. The Darwin -arch i386 block likewise applies only
+	# when targeting i386 — on aarch64 macOS / Apple-Silicon native builds
+	# (if anyone ever does that) those flags would be wrong.
+	set(_HALFLIFE_IS_X86_32 FALSE)
+	if (CMAKE_SYSTEM_PROCESSOR MATCHES "i[3-6]86|x86" AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+		set(_HALFLIFE_IS_X86_32 TRUE)
+	endif()
+
 	target_compile_options(${TARGET_NAME} PRIVATE
-		# force 387 for FP math so the precision between win32 and linux and osx match
-		# Note: the pentium-m arch setting is not used for AMD systems in the original makefile
-		# Since the arch settings used are i686 this means including the setting ensures original settings are used,
-		# but it could cause problems for AMD targets
-		$<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-fpermissive -fno-strict-aliasing -Wno-invalid-offsetof -march=pentium-m -mfpmath=387>
+		# Common GNU/Clang flags — apply on every arch.
+		$<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-fpermissive -fno-strict-aliasing -Wno-invalid-offsetof>
+
+		# x86-32-only: force 387 FP math + pentium-m arch (matches Valve's
+		# original makefile; produces ABI-equivalent code to engine 8684's
+		# expectations on i686).
+		$<$<AND:$<CXX_COMPILER_ID:Clang,AppleClang,GNU>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-march=pentium-m -mfpmath=387>
 
 		# flifetime-dse=1 is needed to disable a compiler optimization that optimizes out std::memset calls in CBaseEntity::operator new
 		# See https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html#index-flifetime-dse for more information about this flag
@@ -89,9 +103,9 @@ function(set_common_properties TARGET_NAME)
 		# Can't set warning level to W4 until the compiler can deal with std::visit containing static_assert, which currently causes false positive "Unreachable code" warnings
 		$<$<CXX_COMPILER_ID:MSVC>:/W3 /MP>
 
-		# These are all from the original Makefile
-		# They have not been tested with CMake since there is no Mac system available to test on, so this might not work
-		$<$<PLATFORM_ID:Darwin>:-Qunused-arguments -mmacosx-version-min=10.5 -fasm-blocks -arch i386 -march=prescott -momit-leaf-frame-pointer -mtune=core2>)
+		# Darwin x86-32-only: original Makefile's macOS i386 block. Untested
+		# under CMake; gated on x86-32 so it doesn't fire on Apple Silicon.
+		$<$<AND:$<PLATFORM_ID:Darwin>,$<BOOL:${_HALFLIFE_IS_X86_32}>>:-Qunused-arguments -mmacosx-version-min=10.5 -fasm-blocks -arch i386 -march=prescott -momit-leaf-frame-pointer -mtune=core2>)
 
 	# Disable certain compiler warnings.
 	if (MSVC)
