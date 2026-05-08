@@ -3,8 +3,11 @@ name: CI/CD
 on: [push, pull_request]
 
 jobs:
-  linux:
-    name: Linux-x86
+  # Linux i386 — legacy Makefile path. Kept for the master-branch
+  # workflow; reproduces the original CI's matrix behaviour. Output
+  # paths: linux/release/{hl.so,client.so}.
+  linux-i386:
+    name: Linux-i386
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -12,42 +15,122 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      
+
       - name: Install G++ Multilib, Clang++ & OpenGL library
         run: |
           sudo apt update
           sudo apt install -y g++-multilib clang libgl1-mesa-dev
-      
-      - name: Build
+
+      - name: Build (Makefile, i386)
         run: |
           cd linux
           make COMPILER=${{ matrix.compiler }} CFG=release -j2
-      
+
       - name: Deploy
         uses: actions/upload-artifact@v4
         with:
-          name: Linux-x86-${{ matrix.compiler }}
+          name: Linux-i386-${{ matrix.compiler }}
           path: |
             linux/release/client.so
             linux/release/client.so.dbg
             linux/release/hl.so
             linux/release/hl.so.dbg
-      
+
+  # Linux amd64 — CMake (top-level) build. The 64bit-branch CMakeLists
+  # gates -m32 / -mfpmath=387 to "x86-32 target", so a default cmake
+  # invocation on amd64 produces real 64-bit binaries.
+  linux-amd64:
+    name: Linux-amd64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libgl1-mesa-dev
+
+      - name: Configure (amd64)
+        run: |
+          cmake -B build-amd64 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/install/valve
+
+      - name: Build
+        run: cmake --build build-amd64 -j$(nproc)
+
+      - name: Install (stages cl_dlls/client.so + dlls/hl.so)
+        run: cmake --install build-amd64
+
+      - name: Stage per-arch
+        run: |
+          mkdir -p staged-amd64/cl_dlls staged-amd64/dlls
+          cp /tmp/install/valve/cl_dlls/client.so staged-amd64/cl_dlls/client.so
+          cp /tmp/install/valve/dlls/hl.so        staged-amd64/dlls/hl.so
+
+      - name: Deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-amd64
+          path: staged-amd64/**
+
+  # Linux aarch64 — cross-compiled via the in-tree toolchain file.
+  # cmake/LinuxToolchain-aarch64.cmake probes for an unversioned
+  # aarch64-linux-gnu-gcc first, then falls back to -13.
+  linux-aarch64:
+    name: Linux-aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install aarch64 cross-toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential cmake \
+            gcc-13-aarch64-linux-gnu g++-13-aarch64-linux-gnu
+
+      - name: Configure (aarch64 cross)
+        run: |
+          cmake -B build-aarch64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/LinuxToolchain-aarch64.cmake \
+            -DCMAKE_INSTALL_PREFIX=/tmp/install/valve
+
+      - name: Build
+        run: cmake --build build-aarch64 -j$(nproc)
+
+      - name: Install
+        run: cmake --install build-aarch64
+
+      - name: Stage per-arch
+        run: |
+          mkdir -p staged-aarch64/cl_dlls staged-aarch64/dlls
+          cp /tmp/install/valve/cl_dlls/client.so staged-aarch64/cl_dlls/client.so
+          cp /tmp/install/valve/dlls/hl.so        staged-aarch64/dlls/hl.so
+
+      - name: Deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-aarch64
+          path: staged-aarch64/**
+
   win32:
     name: Win32
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x86
-      
+
       - name: Build
         run: msbuild projects/vs2019/projects.sln -t:rebuild -property:Configuration=Release -maxcpucount:2
-      
+
       - name: Deploy
         uses: actions/upload-artifact@v4
         with:
@@ -57,4 +140,3 @@ jobs:
             projects/vs2019/Release/hl_cdll/client.pdb
             projects/vs2019/Release/hldll/hl.dll
             projects/vs2019/Release/hldll/hl.pdb
-      
