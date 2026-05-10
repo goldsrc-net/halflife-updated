@@ -802,6 +802,13 @@ void CBasePlayer::RemoveAllItems(bool removeSuit)
 	pev->weaponmodel = 0;
 
 	m_WeaponBits = 0ULL;
+	// Mirror m_WeaponBits = 0 onto the documented pev->weapons mask so
+	// server-side consumers (Metamod plugins, the engine's
+	// cdata->iWeaponBits delivery to vanilla clients) see the wipe too.
+	// SetHasSuit() below goes through SetWeaponBit() / ClearWeaponBit(),
+	// which are paired to maintain pev->weapons in lockstep with
+	// m_WeaponBits.
+	pev->weapons = 0;
 
 	//Re-add suit bit if needed.
 	SetHasSuit(!removeSuit);
