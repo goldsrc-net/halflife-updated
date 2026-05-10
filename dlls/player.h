@@ -361,11 +361,20 @@ public:
 inline void CBasePlayer::SetWeaponBit(int id)
 {
 	m_WeaponBits |= 1ULL << id;
+	// Mirror to pev->weapons so server-side consumers (Metamod plugins,
+	// the engine's cdata->iWeaponBits delivery to vanilla clients, any
+	// HL mod code that pre-dates m_WeaponBits) see the player's actual
+	// weapon mask. Bits 32..63 don't fit in pev->weapons (int32), but
+	// today only WEAPON_SUIT (31) and weapons 0..30 are used.
+	if (id < 32)
+		pev->weapons |= 1 << id;
 }
 
 inline void CBasePlayer::ClearWeaponBit(int id)
 {
 	m_WeaponBits &= ~(1ULL << id);
+	if (id < 32)
+		pev->weapons &= ~(1 << id);
 }
 
 inline bool CBasePlayer::HasSuit() const
