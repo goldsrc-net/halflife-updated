@@ -1728,7 +1728,7 @@ void CMultiplayBusters::PlayerKilled(CBasePlayer* pVictim, entvars_t* pKiller, e
 
 		if (peKiller)
 		{
-			UTIL_ClientPrintAll(HUD_PRINTTALK, UTIL_VarArgs("%s has has killed the Buster!\n", STRING((CBasePlayer*)peKiller->pev->netname)));
+			UTIL_ClientPrintAll(HUD_PRINTTALK, UTIL_VarArgs("%s has has killed the Buster!\n", STRING(peKiller->pev->netname)));
 		}
 
 		pVictim->pev->renderfx = kRenderFxNone;
@@ -1869,7 +1869,7 @@ void CMultiplayBusters::PlayerGotWeapon(CBasePlayer* pPlayer, CBasePlayerItem* p
 		pPlayer->RemoveAllItems(false);
 
 		UTIL_ClientPrintAll(HUD_PRINTCENTER, "Long live the new Buster!");
-		UTIL_ClientPrintAll(HUD_PRINTTALK, UTIL_VarArgs("%s is busting!\n", STRING((CBasePlayer*)pPlayer->pev->netname)));
+		UTIL_ClientPrintAll(HUD_PRINTTALK, UTIL_VarArgs("%s is busting!\n", STRING(pPlayer->pev->netname)));
 
 		SetPlayerModel(pPlayer);
 
