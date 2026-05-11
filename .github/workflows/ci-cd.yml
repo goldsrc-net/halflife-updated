@@ -53,20 +53,19 @@ jobs:
 
       - name: Configure (amd64)
         run: |
-          cmake -B build-amd64 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/tmp/install/valve
+          cmake -B build-amd64 -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
-        run: cmake --build build-amd64 -j$(nproc)
-
-      - name: Install (stages cl_dlls/client.so + dlls/hl.so)
-        run: cmake --install build-amd64
+      - name: Build (hl gamedll only)
+        # cl_dll/client.so links against the prebuilt x86-32 vgui.so
+        # and there's no native 64-bit GoldSrc client engine to load
+        # the result anyway — only build the server-side hl gamedll
+        # on non-i386, matching the buildchain Makefile pattern.
+        run: cmake --build build-amd64 --target hl -j$(nproc)
 
       - name: Stage per-arch
         run: |
-          mkdir -p staged-amd64/cl_dlls staged-amd64/dlls
-          cp /tmp/install/valve/cl_dlls/client.so staged-amd64/cl_dlls/client.so
-          cp /tmp/install/valve/dlls/hl.so        staged-amd64/dlls/hl.so
+          mkdir -p staged-amd64/dlls
+          cp build-amd64/dlls/hl.so staged-amd64/dlls/hl.so
 
       - name: Deploy
         uses: actions/upload-artifact@v4
@@ -95,20 +94,18 @@ jobs:
         run: |
           cmake -B build-aarch64 \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/LinuxToolchain-aarch64.cmake \
-            -DCMAKE_INSTALL_PREFIX=/tmp/install/valve
+            -DCMAKE_TOOLCHAIN_FILE=cmake/LinuxToolchain-aarch64.cmake
 
-      - name: Build
-        run: cmake --build build-aarch64 -j$(nproc)
-
-      - name: Install
-        run: cmake --install build-aarch64
+      - name: Build (hl gamedll only)
+        # Same rationale as Linux-amd64: no native 64-bit GoldSrc
+        # client engine, and the prebuilt linux/release/vgui.so is
+        # x86 only. Server-side hl.so is all that's needed.
+        run: cmake --build build-aarch64 --target hl -j$(nproc)
 
       - name: Stage per-arch
         run: |
-          mkdir -p staged-aarch64/cl_dlls staged-aarch64/dlls
-          cp /tmp/install/valve/cl_dlls/client.so staged-aarch64/cl_dlls/client.so
-          cp /tmp/install/valve/dlls/hl.so        staged-aarch64/dlls/hl.so
+          mkdir -p staged-aarch64/dlls
+          cp build-aarch64/dlls/hl.so staged-aarch64/dlls/hl.so
 
       - name: Deploy
         uses: actions/upload-artifact@v4
