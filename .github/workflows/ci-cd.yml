@@ -137,3 +137,38 @@ jobs:
             projects/vs2019/Release/hl_cdll/client.pdb
             projects/vs2019/Release/hldll/hl.dll
             projects/vs2019/Release/hldll/hl.pdb
+
+  # Win64 — CMake-driven, gamedll only. The projects/vs2019 .sln is
+  # Win32-locked (links the prebuilt x86 vgui.lib for cl_dll), so the
+  # x64 path uses the top-level CMakeLists.txt with cmake -A x64 and
+  # builds just the hl target — same scope as Linux-amd64/aarch64,
+  # since there's no native 64-bit GoldSrc client engine to load
+  # client.dll on Win64 anyway.
+  win64:
+    name: Win64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure (Win64)
+        run: cmake -B build-win64 -A x64
+
+      - name: Build (hl gamedll only)
+        run: cmake --build build-win64 --config Release --target hl -j 2
+
+      - name: Stage per-arch
+        shell: bash
+        run: |
+          mkdir -p staged-win64/dlls
+          cp build-win64/dlls/Release/hl.dll staged-win64/dlls/hl.dll
+          # PDB is optional but useful for debugging.
+          if [ -f build-win64/dlls/Release/hl.pdb ]; then
+            cp build-win64/dlls/Release/hl.pdb staged-win64/dlls/hl.pdb
+          fi
+
+      - name: Deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: Win64
+          path: staged-win64/**
