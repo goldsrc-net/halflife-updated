@@ -8,7 +8,7 @@ jobs:
   # paths: linux/release/{hl.so,client.so}.
   linux-i386:
     name: Linux-i386
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         compiler: [g++, clang++]
@@ -41,7 +41,7 @@ jobs:
   # invocation on amd64 produces real 64-bit binaries.
   linux-amd64:
     name: Linux-amd64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -78,17 +78,22 @@ jobs:
   # aarch64-linux-gnu-gcc first, then falls back to -13.
   linux-aarch64:
     name: Linux-aarch64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Install aarch64 cross-toolchain
+        # Ubuntu 22.04 ships gcc-11 as the newest aarch64 cross-toolchain.
+        # The toolchain file probes for the unversioned binary first, so
+        # symlinking gcc-11 → unversioned lets cmake find it.
         run: |
           sudo apt update
           sudo apt install -y \
             build-essential cmake \
-            gcc-13-aarch64-linux-gnu g++-13-aarch64-linux-gnu
+            gcc-11-aarch64-linux-gnu g++-11-aarch64-linux-gnu
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-11 /usr/bin/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-g++-11 /usr/bin/aarch64-linux-gnu-g++
 
       - name: Configure (aarch64 cross)
         run: |
