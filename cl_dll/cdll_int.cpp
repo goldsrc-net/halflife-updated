@@ -120,6 +120,7 @@ static bool CL_InitClient()
 		return false;
 	}
 
+#if !defined(__EMSCRIPTEN__)
 	if (UTIL_IsValveGameDirectory())
 	{
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fatal Error",
@@ -127,6 +128,7 @@ static bool CL_InitClient()
 			"Run this mod from its intended location\n\nThe game will now shut down", nullptr);
 		return false;
 	}
+#endif
 
 	// get tracker interface, if any
 	return true;
