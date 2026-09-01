@@ -276,3 +276,41 @@ int stub_PrecacheSound(const char* s) { return 0; }
 unsigned short stub_PrecacheEvent(int type, const char* s) { return 0; }
 const char* stub_NameForFunction(uintp function) { return "func"; }
 void stub_SetModel(edict_t* e, const char* m) {}
+
+// On 64-bit, MAKE_STRING() expands to ALLOC_STRING() = (*g_engfuncs.pfnAllocString)
+// (the pointer-arithmetic form doesn't fit in 32 bits). The client engine API has
+// no AllocString, so client-side weapon prediction (CGlock::Spawn etc.) would call
+// a NULL pointer. We intern strings into a small local pool and point
+// gpGlobals->pStringBase at it (see HUD_InitClientWeapons) so MAKE_STRING()/STRING()
+// stay consistent. Offset 0 is reserved as "" so a zeroed string_t reads empty.
+// (Ported from mod-ts cl_dll/com_weapons.cpp.)
+static char s_clStringPool[8192] = {0};
+static int s_clStringPoolUsed = 1;
+
+const char* stub_StringBase()
+{
+	return s_clStringPool;
+}
+
+int stub_AllocString(const char* szValue)
+{
+	if (!szValue || !*szValue)
+		return 0;
+
+	// dedup — the predicted weapons intern only a handful of distinct strings
+	for (int o = 1; o < s_clStringPoolUsed;)
+	{
+		if (0 == strcmp(s_clStringPool + o, szValue))
+			return o;
+		o += (int)strlen(s_clStringPool + o) + 1;
+	}
+
+	int len = (int)strlen(szValue) + 1;
+	if (s_clStringPoolUsed + len > (int)sizeof(s_clStringPool))
+		return 0; // pool exhausted — fall back to ""
+
+	int off = s_clStringPoolUsed;
+	memcpy(s_clStringPool + off, szValue, len);
+	s_clStringPoolUsed += len;
+	return off;
+}

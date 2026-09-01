@@ -426,7 +426,13 @@ void HUD_InitClientWeapons()
 	// Fill in current time ( probably not needed )
 	gpGlobals->time = gEngfuncs.GetClientTime();
 
+	// On 64-bit, MAKE_STRING() in shared weapon code (e.g. CGlock::Spawn) is an
+	// engine AllocString call; give it a local string pool so it doesn't deref a
+	// NULL pointer, and point pStringBase at the same pool so STRING() reads back.
+	gpGlobals->pStringBase = stub_StringBase();
+
 	// Fake functions
+	g_engfuncs.pfnAllocString = stub_AllocString;
 	g_engfuncs.pfnPrecacheModel = stub_PrecacheModel;
 	g_engfuncs.pfnPrecacheSound = stub_PrecacheSound;
 	g_engfuncs.pfnPrecacheEvent = stub_PrecacheEvent;

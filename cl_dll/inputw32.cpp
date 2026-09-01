@@ -28,9 +28,20 @@
 
 #include "PlatformHeaders.h"
 
+#include <cmath>
+
+// Mouse-look delta source is per-target: Xash (wasm + native) PUSHES deltas (handled by the
+// s_pushInputSeen flag below); native GoldSrc reads the OS itself, split by platform —
+//   * Windows -> Win32 GetCursorPos/SetCursorPos, like the original Valve client.dll (no SDL)
+//   * Linux   -> SDL_GetRelativeMouseState, exactly like valve's client.so (SDL is mandatory there)
+// GoldSrc is 32-bit, so SDL is confined to i386 Linux; Windows (no SDL2.lib, on purpose), amd64
+// and wasm never reference it. This is the platform split upstream never guarded (SDL was
+// unconditional, which is why the Windows build pulled in SDL2).
+#if defined(__i386__) && !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#define HL_INPUT_SDL 1
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_mouse.h>
-#include <SDL2/SDL_gamecontroller.h>
+#endif
 
 void IN_ResetMouse();
 
@@ -67,11 +78,19 @@ static cvar_t* m_rawinput = nullptr;
 
 static bool IN_UseRawInput()
 {
-	// a1ba: m_rawinput 1 is SDL input on Windows
-	// Linux only has SDL input, so return true here
+	// m_rawinput 1 is the engine-push input path (the engine reads the mouse and
+	// pushes deltas). On Linux/xash it is always the push path; on WIN32/GoldSrc it
+	// falls back to the classic GetMousePosition path when m_rawinput is 0.
 	return m_rawinput ? m_rawinput->value != 0 : true;
 }
 
+#if defined(HL_INPUT_SDL)
+// GoldSrc Linux (i386) owns the mouse grab CLIENT-side, exactly like valve's client.so:
+// SDL relative mode confines + hides the cursor so mouse-look isn't bounded by the window
+// (without it, yaw locks at the window edge — the ±90° bug). We release the grab whenever a
+// VGUI panel needs the cursor (g_iVisibleMouse) and re-grab on return to gameplay. On Windows
+// the OS is re-centered each frame instead (IN_ResetMouse); on Xash/wasm the engine owns the
+// grab — so this whole mechanism is i386-Linux only.
 static SDL_bool mouseRelative = SDL_TRUE;
 
 static void IN_SetMouseRelative(bool enable)
@@ -80,6 +99,39 @@ static void IN_SetMouseRelative(bool enable)
 
 	SDL_SetRelativeMouseMode(value);
 	mouseRelative = value;
+}
+#endif
+
+// -----------------------------------------------------------------------------
+// Engine-push input (Xash3D FWGS extension). The engine owns the mouse/joystick and
+// PUSHES per-frame deltas into the client via IN_ClientLookEvent / IN_ClientMoveEvent,
+// which it resolves by name (COM_GetProcAddress). This replaces the old client-side
+// SDL_GetRelativeMouseState polling, so the client links no libSDL2. rel_yaw/rel_pitch
+// arrive already scaled by the engine's m_yaw/m_pitch (raw_counts * m_yaw); the mouse
+// pipeline in IN_MouseMove inverts that to recover the raw delta so the SDK's m_customaccel +
+// sensitivity model is preserved exactly. BOTH exports must exist: the engine calls
+// pfnMoveEvent unconditionally whenever pfnLookEvent is present.
+static float s_relYaw = 0.0f;
+static float s_relPitch = 0.0f;
+static float s_acForward = 0.0f;
+static float s_acSide = 0.0f;
+// Set the first time the engine actually PUSHES input (Xash fork). Retail GoldSrc has no
+// IN_ClientLookEvent/IN_ClientMoveEvent API and never calls these, so the flag stays false
+// and IN_MouseMove falls back to polling the engine cursor (the classic HL SDK mouse loop).
+static bool s_pushInputSeen = false;
+
+extern "C" void DLLEXPORT IN_ClientLookEvent(float relyaw, float relpitch)
+{
+	s_pushInputSeen = true;
+	s_relYaw += relyaw;
+	s_relPitch += relpitch;
+}
+
+extern "C" void DLLEXPORT IN_ClientMoveEvent(float forwardmove, float sidemove)
+{
+	s_pushInputSeen = true;
+	s_acForward += forwardmove;
+	s_acSide += sidemove;
 }
 
 static bool m_bMouseThread = false;
@@ -145,7 +197,9 @@ std::uint32_t joy_oldbuttonstate, joy_oldpovstate;
 int joy_id;
 std::uint32_t joy_numbuttons;
 
-SDL_GameController* s_pJoystick = NULL;
+// Engine owns the joystick now (movement pushed via IN_ClientMoveEvent, buttons via
+// the normal Key_Event path). Kept as an opaque handle for the inert legacy poll code.
+void* s_pJoystick = nullptr;
 
 // none of these cvars are saved over a session
 // this means that advanced controller configuration needs to be executed
@@ -204,7 +258,6 @@ struct MouseThread
 MouseThread s_MouseThread;
 
 std::atomic<Point> s_mouseDelta;
-std::atomic<Point> current_pos;
 std::atomic<Point> old_mouse_pos;
 
 Point GetMousePosition()
@@ -270,6 +323,9 @@ void DLLEXPORT IN_ActivateMouse()
 		mouseactive = true;
 	}
 
+#if defined(HL_INPUT_SDL)
+	// GoldSrc Linux: grab the cursor for mouse-look unless a VGUI panel needs it visible.
+	// (Windows re-centers via IN_ResetMouse; Xash/wasm let the engine own the grab.)
 	if (g_iVisibleMouse || !IN_UseRawInput())
 	{
 		IN_SetMouseRelative(false);
@@ -278,6 +334,7 @@ void DLLEXPORT IN_ActivateMouse()
 	{
 		IN_SetMouseRelative(true);
 	}
+#endif
 
 	// Clear out accumulated mouse input from main menu movement.
 	IN_ResetMouse();
@@ -302,7 +359,10 @@ void DLLEXPORT IN_DeactivateMouse()
 		mouseactive = false;
 	}
 
+#if defined(HL_INPUT_SDL)
+	// GoldSrc Linux: release the cursor grab when the mouse is deactivated.
 	IN_SetMouseRelative(false);
+#endif
 }
 
 /*
@@ -409,9 +469,11 @@ FIXME: Call through to engine?
 */
 void IN_ResetMouse()
 {
-	// no work to do in SDL
+	// SDL relative mode (Linux) and the engine-push path (Xash/wasm) auto-reset — nothing to do.
 #ifdef WIN32
-	if (!IN_UseRawInput() && mouseactive && gEngfuncs.GetWindowCenterX && gEngfuncs.GetWindowCenterY)
+	// The Win32 GetCursorPos path reads absolute position, so re-center every frame. That path
+	// runs whenever the engine isn't pushing (i.e. GoldSrc Windows), regardless of m_rawinput.
+	if (!s_pushInputSeen && mouseactive && gEngfuncs.GetWindowCenterX && gEngfuncs.GetWindowCenterY)
 	{
 		SetCursorPos(gEngfuncs.GetWindowCenterX(), gEngfuncs.GetWindowCenterY());
 
@@ -428,12 +490,17 @@ IN_ResetRelativeMouseState
 */
 void IN_ResetRelativeMouseState(void)
 {
-	if (IN_UseRawInput())
-	{
-		SDL_PumpEvents();
-		int deltaX, deltaY;
-		SDL_GetRelativeMouseState(&deltaX, &deltaY);
-	}
+	// Discard any pending delta so it doesn't leak across a state change (menu <-> game).
+	s_relYaw = 0.0f;    // engine-push (Xash/wasm)
+	s_relPitch = 0.0f;
+#if defined(HL_INPUT_SDL)
+	// GoldSrc Linux: flush SDL's accumulated relative motion so it doesn't jump the view.
+	SDL_PumpEvents();
+	int deltaX, deltaY;
+	SDL_GetRelativeMouseState(&deltaX, &deltaY);
+	(void)deltaX;
+	(void)deltaY;
+#endif
 }
 
 /*
@@ -538,46 +605,49 @@ void IN_MouseMove(float frametime, usercmd_t* cmd)
 	if (!iMouseInUse && !gHUD.m_iIntermission && !g_iVisibleMouse)
 	{
 		int deltaX, deltaY;
-#ifdef WIN32
-		if (!IN_UseRawInput())
+		if (s_pushInputSeen)
 		{
+			// Xash push (wasm + native Xash): the engine already scaled raw counts by
+			// m_yaw/m_pitch; invert to recover the raw delta so the SDK's accel/sensitivity model
+			// (below) applies exactly. Guard the divide (m_yaw/m_pitch can be 0).
+			deltaX = (m_yaw->value != 0.0f) ? (int)lroundf(-s_relYaw / m_yaw->value) : 0;
+			deltaY = (m_pitch->value != 0.0f) ? (int)lroundf(s_relPitch / m_pitch->value) : 0;
+			s_relYaw = 0.0f;
+			s_relPitch = 0.0f;
+		}
+		else
+		{
+#if defined(_WIN32)
+			// GoldSrc Windows: classic GetCursorPos, delta from window center; IN_ResetMouse()
+			// re-centers each frame (SetCursorPos). Same as the classic HL SDK Windows path.
 			if (m_bMouseThread)
 			{
-				current_pos = s_mouseDelta.load();
+				const Point d = s_mouseDelta.load();
 				s_mouseDelta = Point{};
+				deltaX = d.x;
+				deltaY = d.y;
 			}
 			else
 			{
-				current_pos = GetMousePosition();
+				const Point p = GetMousePosition();
+				deltaX = p.x - gEngfuncs.GetWindowCenterX();
+				deltaY = p.y - gEngfuncs.GetWindowCenterY();
 			}
-		}
-		else
-#endif
-		{
+#elif defined(HL_INPUT_SDL)
+			// GoldSrc Linux (i386): SDL relative mouse — the only native path, matches valve's
+			// client.so. The engine holds SDL in relative mode while the mouse is grabbed; we
+			// just drain the accumulated relative delta (no re-centering needed).
 			SDL_GetRelativeMouseState(&deltaX, &deltaY);
-#ifdef WIN32
-			current_pos = {deltaX, deltaY};
+#else
+			// amd64/aarch64 (Xash native) + wasm: input only ever arrives via the push above,
+			// so this fallback is unreachable — kept SDL-free (no libSDL2 on those targets).
+			deltaX = 0;
+			deltaY = 0;
 #endif
 		}
 
-#ifdef WIN32
-		if (!IN_UseRawInput())
-		{
-			pos = current_pos.load();
-
-			if (!m_bMouseThread)
-			{
-				pos.x = pos.x - gEngfuncs.GetWindowCenterX() + mx_accum;
-				pos.y = pos.y - gEngfuncs.GetWindowCenterY() + my_accum;
-			}
-		}
-		else
-#endif
-		{
-			pos.x = deltaX + mx_accum;
-			pos.y = deltaY + my_accum;
-		}
-
+		pos.x = deltaX + mx_accum;
+		pos.y = deltaY + my_accum;
 		mx_accum = 0;
 		my_accum = 0;
 
@@ -633,6 +703,11 @@ void IN_MouseMove(float frametime, usercmd_t* cmd)
 
 	gEngfuncs.SetViewAngles((float*)viewangles);
 
+#if defined(HL_INPUT_SDL)
+	// GoldSrc Linux, per-frame: release the grab the moment a VGUI panel raises the cursor
+	// (g_iVisibleMouse — set by vgui_TeamFortressViewport for the MOTD/buy menu/scoreboard) and
+	// re-grab as soon as it's gone. This is the fix for "menu cursor doesn't appear / can't move
+	// it": without it the grab stays on and the OS cursor is pinned to center under the panel.
 	if ((!IN_UseRawInput() && SDL_FALSE != mouseRelative) || g_iVisibleMouse)
 	{
 		IN_SetMouseRelative(false);
@@ -641,6 +716,7 @@ void IN_MouseMove(float frametime, usercmd_t* cmd)
 	{
 		IN_SetMouseRelative(true);
 	}
+#endif
 
 	/*
 //#define TRACE_TEST
@@ -667,25 +743,28 @@ void DLLEXPORT IN_Accumulate()
 	{
 		if (mouseactive)
 		{
-#ifdef WIN32
-			if (!IN_UseRawInput())
+			if (s_pushInputSeen)
 			{
-				if (!m_bMouseThread)
-				{
-					const auto pos = GetMousePosition();
-					current_pos = pos;
-
-					mx_accum += pos.x - gEngfuncs.GetWindowCenterX();
-					my_accum += pos.y - gEngfuncs.GetWindowCenterY();
-				}
+				// Engine-push (Xash/wasm): the engine accumulates between frames via repeated
+				// IN_ClientLookEvent calls; IN_MouseMove drains it. Nothing to poll here.
 			}
 			else
-#endif
 			{
+#if defined(_WIN32)
+				// GoldSrc Windows: accumulate the GetCursorPos delta from window center.
+				if (!m_bMouseThread)
+				{
+					const Point p = GetMousePosition();
+					mx_accum += p.x - gEngfuncs.GetWindowCenterX();
+					my_accum += p.y - gEngfuncs.GetWindowCenterY();
+				}
+#elif defined(HL_INPUT_SDL)
+				// GoldSrc Linux (i386): drain SDL's relative delta into the accumulator.
 				int deltaX, deltaY;
 				SDL_GetRelativeMouseState(&deltaX, &deltaY);
 				mx_accum += deltaX;
 				my_accum += deltaY;
+#endif
 			}
 			// force the mouse to the center, so there's room to move
 			IN_ResetMouse();
@@ -727,65 +806,20 @@ void IN_StartupJoystick()
 
 	flLastCheck = gEngfuncs.GetAbsoluteTime();
 
-	int nJoysticks = SDL_NumJoysticks();
-	if (nJoysticks > 0)
-	{
-		if (s_pJoystick == NULL)
-		{
-			for (int i = 0; i < nJoysticks; i++)
-			{
-				if (SDL_FALSE != SDL_IsGameController(i))
-				{
-					s_pJoystick = SDL_GameControllerOpen(i);
-					if (s_pJoystick)
-					{
-						// save the joystick's number of buttons and POV status
-						joy_numbuttons = SDL_CONTROLLER_BUTTON_MAX;
-						joy_haspov = false;
-
-						// old button and POV states default to no buttons pressed
-						joy_oldbuttonstate = joy_oldpovstate = 0;
-
-						// mark the joystick as available and advanced initialization not completed
-						// this is needed as cvars are not available during initialization
-						gEngfuncs.Con_Printf("joystick found %s\n\n", SDL_GameControllerName(s_pJoystick));
-						joy_avail = true;
-						joy_advancedinit = false;
-						break;
-					}
-				}
-			}
-		}
-	}
-	else
-	{
-		if (s_pJoystick)
-			SDL_GameControllerClose(s_pJoystick);
-
-		s_pJoystick = NULL;
-		if (joy_avail)
-		{
-			joy_avail = 0;
-			gEngfuncs.Con_DPrintf("joystick not found -- driver not present\n\n");
-		}
-	}
+	// No client-side device enumeration: the engine owns the joystick and pushes
+	// movement via IN_ClientMoveEvent (applied in IN_Move); buttons arrive through the
+	// engine's normal Key_Event path. Mark the legacy poll path inert.
+	s_pJoystick = nullptr;
+	joy_avail = 0;
 }
 
 
 int RawValuePointer(int axis)
 {
-	switch (axis)
-	{
-	default:
-	case JOY_AXIS_X:
-		return SDL_GameControllerGetAxis(s_pJoystick, SDL_CONTROLLER_AXIS_LEFTX);
-	case JOY_AXIS_Y:
-		return SDL_GameControllerGetAxis(s_pJoystick, SDL_CONTROLLER_AXIS_LEFTY);
-	case JOY_AXIS_Z:
-		return SDL_GameControllerGetAxis(s_pJoystick, SDL_CONTROLLER_AXIS_RIGHTX);
-	case JOY_AXIS_R:
-		return SDL_GameControllerGetAxis(s_pJoystick, SDL_CONTROLLER_AXIS_RIGHTY);
-	}
+	// Legacy client-side axis read is retired (the engine pushes movement via
+	// IN_ClientMoveEvent). Inert: joy_avail is always false so this is never reached.
+	(void)axis;
+	return 0;
 }
 
 /*
@@ -868,14 +902,8 @@ void IN_Commands()
 
 	// loop through the joystick buttons
 	// key a joystick event or auxillary event for higher number buttons for each state change
+	// Joystick buttons arrive via the engine's normal Key_Event path now (no SDL poll).
 	buttonstate = 0;
-	for (i = 0; i < SDL_CONTROLLER_BUTTON_MAX; i++)
-	{
-		if (0 != SDL_GameControllerGetButton(s_pJoystick, (SDL_GameControllerButton)i))
-		{
-			buttonstate |= 1 << i;
-		}
-	}
 
 	for (i = 0; i < JOY_MAX_AXES; i++)
 	{
@@ -931,7 +959,7 @@ IN_ReadJoystick
 */
 bool IN_ReadJoystick()
 {
-	SDL_JoystickUpdate();
+	// Engine owns joystick polling now; nothing to update client-side.
 	return true;
 }
 
@@ -1138,6 +1166,14 @@ void IN_Move(float frametime, usercmd_t* cmd)
 	}
 
 	IN_JoyMove(frametime, cmd);
+
+	// Engine-push movement (gamepad/touch the engine owns, via IN_ClientMoveEvent) —
+	// replaces the old SDL gamecontroller axes. Zero for mouse+keyboard players, so this
+	// is a no-op for the common case and adds gamepad support where the engine provides it.
+	cmd->forwardmove += s_acForward;
+	cmd->sidemove += s_acSide;
+	s_acForward = 0.0f;
+	s_acSide = 0.0f;
 }
 
 /*

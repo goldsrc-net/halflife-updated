@@ -1,12 +1,45 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
-#include <memory_resource>
 #include <vector>
 
 class CBaseParticle;
 
 #define TRIANGLE_FPS 30
+
+// Minimal stand-in for std::pmr::unsynchronized_pool_resource: the glibc-2.28 buildchain's
+// gcc-8.3 has no <memory_resource>. Same allocate/deallocate/release surface CMiniMem uses,
+// backed by ::operator new (max_align_t-aligned, which satisfies CBaseParticle). release()
+// frees everything still outstanding.
+class CMiniPool
+{
+private:
+	std::vector<void*> _blocks;
+
+public:
+	void* allocate(std::size_t sizeInBytes, std::size_t /*alignment*/ = 0)
+	{
+		void* p = ::operator new(sizeInBytes);
+		_blocks.push_back(p);
+		return p;
+	}
+
+	void deallocate(void* memory, std::size_t /*sizeInBytes*/ = 0, std::size_t /*alignment*/ = 0)
+	{
+		auto it = std::find(_blocks.begin(), _blocks.end(), memory);
+		if (it != _blocks.end())
+			_blocks.erase(it);
+		::operator delete(memory);
+	}
+
+	void release()
+	{
+		for (void* p : _blocks)
+			::operator delete(p);
+		_blocks.clear();
+	}
+};
 
 /**
 *	@brief Simple allocator that uses a chunk-based pool to serve requests.
@@ -16,7 +49,7 @@ class CMiniMem
 private:
 	static inline CMiniMem* _instance = nullptr;
 
-	std::pmr::unsynchronized_pool_resource _pool;
+	CMiniPool _pool;
 
 	std::vector<CBaseParticle*> _particles;
 	std::size_t _visibleParticles = 0;

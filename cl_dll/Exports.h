@@ -54,6 +54,10 @@ extern "C"
 	void DLLEXPORT IN_MouseEvent (int mstate);
 	void DLLEXPORT IN_Accumulate (void);
 	void DLLEXPORT IN_ClearStates (void);
+	// Xash3D FWGS engine-push input: the engine resolves these by name and feeds the
+	// client per-frame mouse/gamepad deltas (replaces client-side SDL polling).
+	void DLLEXPORT IN_ClientMoveEvent (float forwardmove, float sidemove);
+	void DLLEXPORT IN_ClientLookEvent (float relyaw, float relpitch);
 
 	// From tri
 	void DLLEXPORT HUD_DrawNormalTriangles( void );

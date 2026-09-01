@@ -16,7 +16,6 @@
 #include "in_defs.h"
 #include "Exports.h"
 
-#include "SDL2/SDL_mouse.h"
 
 float CL_KeyState(kbutton_t* key);
 
@@ -82,13 +81,13 @@ void CAM_ToFirstPerson();
 void CAM_StartDistance();
 void CAM_EndDistance();
 
-void SDL_GetCursorPos(Point* p)
+void CAM_GetCursorPos(Point* p)
 {
 	gEngfuncs.GetMousePosition(&p->x, &p->y);
 	//	SDL_GetMouseState( &p->x, &p->y );
 }
 
-void SDL_SetCursorPos(const int x, const int y)
+void CAM_SetCursorPos(const int x, const int y)
 {
 }
 
@@ -199,7 +198,7 @@ void DLLEXPORT CAM_Think()
 	if (cam_mousemove)
 	{
 		//get windows cursor position
-		SDL_GetCursorPos(&cam_mouse);
+		CAM_GetCursorPos(&cam_mouse);
 		//check for X delta values and adjust accordingly
 		//eventually adjust YAW based on amount of movement
 		//don't do any movement of the cam using YAW/PITCH if we are zooming in/out the camera
@@ -272,7 +271,7 @@ void DLLEXPORT CAM_Think()
 				cam_old_mouse_x = cam_mouse.x;
 				cam_old_mouse_y = cam_mouse.y;
 			}
-			SDL_SetCursorPos(gEngfuncs.GetWindowCenterX(), gEngfuncs.GetWindowCenterY());
+			CAM_SetCursorPos(gEngfuncs.GetWindowCenterX(), gEngfuncs.GetWindowCenterY());
 		}
 	}
 
@@ -329,7 +328,7 @@ void DLLEXPORT CAM_Think()
 		//since we are done with the mouse
 		cam_old_mouse_x = cam_mouse.x * gHUD.GetSensitivity();
 		cam_old_mouse_y = cam_mouse.y * gHUD.GetSensitivity();
-		SDL_SetCursorPos(gEngfuncs.GetWindowCenterX(), gEngfuncs.GetWindowCenterY());
+		CAM_SetCursorPos(gEngfuncs.GetWindowCenterX(), gEngfuncs.GetWindowCenterY());
 	}
 #ifdef LATER
 	if (cam_contain->value)
@@ -542,7 +541,7 @@ void CAM_StartMouseMove()
 		{
 			cam_mousemove = true;
 			iMouseInUse = true;
-			SDL_GetCursorPos(&cam_mouse);
+			CAM_GetCursorPos(&cam_mouse);
 
 			if ((flSensitivity = gHUD.GetSensitivity()) != 0)
 			{
@@ -589,7 +588,7 @@ void CAM_StartDistance()
 			cam_distancemove = true;
 			cam_mousemove = true;
 			iMouseInUse = true;
-			SDL_GetCursorPos(&cam_mouse);
+			CAM_GetCursorPos(&cam_mouse);
 			cam_old_mouse_x = cam_mouse.x * gHUD.GetSensitivity();
 			cam_old_mouse_y = cam_mouse.y * gHUD.GetSensitivity();
 		}

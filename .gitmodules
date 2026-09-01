@@ -1,0 +1,7 @@
+[submodule "third_party/openvgui"]
+	path = third_party/openvgui
+	url = https://github.com/FWGS/openvgui.git
+[submodule "third_party/vgui_support"]
+	path = third_party/vgui_support
+	url = https://github.com/goldsrc-net/vgui_support.git
+	branch = emscripten

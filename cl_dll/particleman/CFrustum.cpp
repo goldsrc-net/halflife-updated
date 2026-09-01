@@ -15,7 +15,14 @@
 
 //The triangle API uses OpenGL constants for certain functions.
 #include "PlatformHeaders.h"
-#include <GL/gl.h>
+// The glibc-2.28 buildchain has no GL dev headers; CFrustum only needs these two GL enum
+// values to pass to the engine's TriAPI GetMatrix (it makes no real GL calls).
+#ifndef GL_MODELVIEW_MATRIX
+#define GL_MODELVIEW_MATRIX 0x0BA6
+#endif
+#ifndef GL_PROJECTION_MATRIX
+#define GL_PROJECTION_MATRIX 0x0BA7
+#endif
 
 #include "hud.h"
 #include "cl_util.h"
