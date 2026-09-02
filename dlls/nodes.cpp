@@ -2311,10 +2311,18 @@ void CQueuePriority::Heap_SiftUp()
 		child = parent;
 	}
 }
+// A .nod is a raw memory image of CGraph, CNode, CLink and DIST_INFO (FLoadGraph memcpys them straight over the
+// objects; FSaveGraph writes them the same way), so a graph written by a 32-bit build cannot be read by a 64-bit one:
+// CGraph and CLink hold pointers, which changes their size and every later field offset, while GRAPH_VERSION stays 16
+// on both sides so nothing catches it — the counts come back as garbage and the loader crashes on any graph whose
+// numbers happen to pass the length checks. A 64-bit build therefore keeps its graphs in <map>.nod64, the same image in
+// its own layout, and leaves .nod to 32-bit builds; the shipped .nod files convert with goldsrc.net's tools/nod64.
+constexpr const char* GRAPH_FILE_EXT = sizeof(void*) == 8 ? ".nod64" : ".nod";
+
 
 //=========================================================
 // CGraph - FLoadGraph - attempts to load a node graph from disk.
-// if the current level is maps/snar.bsp, maps/graphs/snar.nod
+// if the current level is maps/snar.bsp, maps/graphs/snar.nod (snar.nod64 on a 64-bit build)
 // will be loaded. If file cannot be loaded, the node tree
 // will be created and saved to disk.
 //=========================================================
@@ -2323,7 +2331,7 @@ bool CGraph::FLoadGraph(const char* szMapName)
 	// make sure the directories have been made
 	g_pFileSystem->CreateDirHierarchy("maps/graphs", "GAMECONFIG");
 
-	const std::string fileName{std::string{"maps/graphs/"} + szMapName + ".nod"};
+	const std::string fileName{std::string{"maps/graphs/"} + szMapName + GRAPH_FILE_EXT};
 
 	//Note: Allow loading graphs only from the mod directory itself.
 	//Do not allow loading from other games since they may have a different graph format.
@@ -2497,7 +2505,7 @@ bool CGraph::FSaveGraph(const char* szMapName)
 	// make sure directories have been made
 	g_pFileSystem->CreateDirHierarchy("maps/graphs", "GAMECONFIG");
 
-	const std::string fileName{std::string{"maps/graphs/"} + szMapName + ".nod"};
+	const std::string fileName{std::string{"maps/graphs/"} + szMapName + GRAPH_FILE_EXT};
 
 	FSFile file{fileName.c_str(), "wb", "GAMECONFIG"};
 
@@ -2607,7 +2615,7 @@ bool CGraph::FSetGraphPointers()
 bool CGraph::CheckNODFile(const char* szMapName)
 {
 	const std::string bspFileName{std::string{"maps/"} + szMapName + ".bsp"};
-	const std::string graphFileName{std::string{"maps/graphs/"} + szMapName + ".nod"};
+	const std::string graphFileName{std::string{"maps/graphs/"} + szMapName + GRAPH_FILE_EXT};
 
 	bool retValue = true;
 
