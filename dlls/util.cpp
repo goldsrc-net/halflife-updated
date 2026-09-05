@@ -1662,19 +1662,22 @@ void UTIL_StripToken(const char* pKey, char* pDest, int nLen)
 // CSave
 //
 // --------------------------------------------------------------
+// The size of one element of each field type IN MEMORY: the stride of an array member (m_rgpPlayerItems, m_hSquadMember,
+// m_rgEntities) and the span DataEmpty tests. On a 64-bit build the pointer types (CLASSPTR, EVARS, EDICT, POINTER) are
+// 8 bytes and an EHANDLE 16, while the save file still holds one int per element — see gFileSizes.
 static int gSizes[FIELD_TYPECOUNT] =
 	{
-		sizeof(float),	   // FIELD_FLOAT
-		sizeof(int),	   // FIELD_STRING
-		sizeof(int),	   // FIELD_ENTITY
-		sizeof(int),	   // FIELD_CLASSPTR
-		sizeof(EHANDLE),   // FIELD_EHANDLE
-		sizeof(int),	   // FIELD_entvars_t
-		sizeof(int),	   // FIELD_EDICT
-		sizeof(float) * 3, // FIELD_VECTOR
-		sizeof(float) * 3, // FIELD_POSITION_VECTOR
-		sizeof(int*),	   // FIELD_POINTER
-		sizeof(int),	   // FIELD_INTEGER
+		sizeof(float),		 // FIELD_FLOAT
+		sizeof(int),		 // FIELD_STRING
+		sizeof(EOFFSET),	 // FIELD_ENTITY
+		sizeof(CBaseEntity*), // FIELD_CLASSPTR
+		sizeof(EHANDLE),	 // FIELD_EHANDLE
+		sizeof(entvars_t*),	 // FIELD_entvars_t
+		sizeof(edict_t*),	 // FIELD_EDICT
+		sizeof(float) * 3,	 // FIELD_VECTOR
+		sizeof(float) * 3,	 // FIELD_POSITION_VECTOR
+		sizeof(int*),		 // FIELD_POINTER
+		sizeof(int),		 // FIELD_INTEGER
 #ifdef GNUC
 		sizeof(int*) * 2, // FIELD_FUNCTION
 #else
@@ -1686,6 +1689,35 @@ static int gSizes[FIELD_TYPECOUNT] =
 		sizeof(float),		   // FIELD_TIME
 		sizeof(int),		   // FIELD_MODELNAME
 		sizeof(int),		   // FIELD_SOUNDNAME
+		sizeof(std::uint64_t), //FIELD_INT64
+};
+
+// The size of one element of each field type IN THE SAVE FILE: what CSave::WriteFields writes per element and the stride
+// CRestore::ReadField steps the input by. Every entity reference (CLASSPTR, EVARS, EDICT, ENTITY, EHANDLE) is saved as
+// one int (an entity table index) whatever its in-memory size, so the two tables differ on 64-bit builds; the original
+// SDK used gSizes for both, which restored the second element of a pointer array 4 bytes into the first (a dangling
+// m_rgpPlayerItems[1] after any load with two weapons crashed GetWeaponData) and read EHANDLE arrays at 16-byte strides.
+// FIELD_STRING and FIELD_FUNCTION are written as strings and stepped by ReadField's own string walk, not by this table.
+static int gFileSizes[FIELD_TYPECOUNT] =
+	{
+		sizeof(float),	   // FIELD_FLOAT
+		sizeof(int),	   // FIELD_STRING (unused: strings)
+		sizeof(int),	   // FIELD_ENTITY
+		sizeof(int),	   // FIELD_CLASSPTR
+		sizeof(int),	   // FIELD_EHANDLE
+		sizeof(int),	   // FIELD_entvars_t
+		sizeof(int),	   // FIELD_EDICT
+		sizeof(float) * 3, // FIELD_VECTOR
+		sizeof(float) * 3, // FIELD_POSITION_VECTOR
+		sizeof(int),	   // FIELD_POINTER (WriteInt: the low int of the address; never restored to anything useful)
+		sizeof(int),	   // FIELD_INTEGER
+		sizeof(int),	   // FIELD_FUNCTION (unused: a name string)
+		sizeof(byte),		   // FIELD_BOOLEAN
+		sizeof(short),		   // FIELD_SHORT
+		sizeof(char),		   // FIELD_CHARACTER
+		sizeof(float),		   // FIELD_TIME
+		sizeof(int),		   // FIELD_MODELNAME (unused: strings)
+		sizeof(int),		   // FIELD_SOUNDNAME (unused: strings)
 		sizeof(std::uint64_t), //FIELD_INT64
 };
 
@@ -2260,7 +2292,7 @@ int CRestore::ReadField(void* pBaseData, TYPEDESCRIPTION* pFields, int fieldCoun
 				for (j = 0; j < pTest->fieldSize; j++)
 				{
 					void* pOutputData = ((char*)pBaseData + pTest->fieldOffset + (j * gSizes[pTest->fieldType]));
-					void* pInputData = (char*)pData + j * gSizes[pTest->fieldType];
+					void* pInputData = (char*)pData + j * gFileSizes[pTest->fieldType];
 
 					switch (pTest->fieldType)
 					{
